@@ -167,11 +167,11 @@
   .type-toggle button { flex: 1; background: none; border: none; padding: 10px 0; border-radius: 9px; color: var(--text-dim); font-size: 14px; font-weight: 600; }
   .type-toggle button.active { background: var(--surface); color: var(--text); }
 
-  .amount-entry { text-align: center; margin: 8px 0 20px; }
-  .amount-entry .currency { font-size: 22px; color: var(--text-faint); vertical-align: top; }
+  .amount-entry { display: flex; align-items: baseline; justify-content: center; margin: 8px 0 20px; gap: 4px; }
+  .amount-entry .currency { font-size: 34px; color: var(--text-faint); font-family: var(--font-display); font-weight: 600; }
   .amount-entry input {
     background: none; border: none; color: var(--text); font-family: var(--font-display);
-    font-size: 52px; font-weight: 600; width: 100%; text-align: center; outline: none;
+    font-size: 52px; font-weight: 600; width: 200px; max-width: 60vw; text-align: left; outline: none;
   }
   .field-label { font-size: 12.5px; color: var(--text-dim); margin: 16px 0 6px; }
 
