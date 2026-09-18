@@ -293,8 +293,9 @@
     .tab-btn[data-view="home"] { order: 2; }
     .tab-btn[data-view="budget"] { order: 3; }
     .tab-btn[data-view="history"] { order: 4; }
-    .tab-btn[data-view="networth"] { order: 5; }
-    .tab-btn[data-view="goal"] { order: 6; }
+    .tab-btn[data-view="cards"] { order: 5; }
+    .tab-btn[data-view="networth"] { order: 6; }
+    .tab-btn[data-view="goal"] { order: 7; }
     .tabbar { display: flex; }
 
     /* Two-column grids on wider views */
@@ -521,8 +522,28 @@
       </div>
     </div>
 
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <select class="text-input" id="history-type-filter" style="flex:1;">
+        <option value="all">All types</option>
+        <option value="income">Income</option>
+        <option value="expense">Expenses</option>
+        <option value="reimbursement">Reimbursements</option>
+      </select>
+      <select class="text-input" id="history-category-filter" style="flex:1;">
+        <option value="all">All categories</option>
+      </select>
+    </div>
     <div class="card" id="history-list"></div>
 
+    <div style="height:16px;"></div>
+  </section>
+
+  <!-- CARDS -->
+  <section class="view" id="view-cards">
+    <h2 class="section-title" style="margin-top:8px;">Credit card value</h2>
+    <div style="font-size:13px; color:var(--text-dim); margin-bottom:14px;">Track whether each card's annual fee actually pays for itself, based on the credits, refunds, and perks you log against it.</div>
+    <div id="cards-list"></div>
+    <button class="btn btn-ghost btn-small" id="add-card-btn">+ Add a card</button>
     <div style="height:16px;"></div>
   </section>
 
@@ -614,6 +635,7 @@
   <button class="tab-btn active" data-view="home"><span class="icon">🧭</span>Home</button>
   <button class="tab-btn" data-view="budget"><span class="icon">📋</span>Budget</button>
   <button class="tab-btn" data-view="history"><span class="icon">🧾</span>History</button>
+  <button class="tab-btn" data-view="cards"><span class="icon">💳</span>Cards</button>
   <button class="tab-btn" data-view="networth"><span class="icon">📈</span>Net Worth</button>
   <button class="tab-btn" data-view="goal"><span class="icon">🎯</span>Goal</button>
 </div>
@@ -684,7 +706,8 @@ const fbStore = getFirestore(fbApp);
       returnRate: 7,
       monthly: 0
     },
-    transactions: {} // keyed by month -> array
+    transactions: {}, // keyed by month -> array
+    cardBenefits: { cards: [], entries: [] }
   };
 
   // ---------- State ----------
@@ -713,13 +736,14 @@ const fbStore = getFirestore(fbApp);
   }
 
   async function loadAll() {
-    const [budget, nwAcc, nwHist, reimb, goal, tx] = await Promise.all([
+    const [budget, nwAcc, nwHist, reimb, goal, tx, cardBen] = await Promise.all([
       loadDocFS("budget", DEFAULTS.budget),
       loadDocFS("networth_accounts", DEFAULTS.networthAccounts),
       loadDocFS("networth_history", DEFAULTS.networthHistory),
       loadDocFS("reimbursement_sources", DEFAULTS.reimbSources),
       loadDocFS("goal_settings", DEFAULTS.goal),
       loadDocFS("transactions", DEFAULTS.transactions),
+      loadDocFS("card_benefits", DEFAULTS.cardBenefits),
     ]);
     state.budget = budget;
     state.networthAccounts = nwAcc;
@@ -727,6 +751,7 @@ const fbStore = getFirestore(fbApp);
     state.reimbSources = reimb;
     state.goal = goal;
     state.transactions = tx;
+    state.cardBenefits = cardBen;
   }
 
   function currentMonthTx() {
@@ -755,6 +780,7 @@ const fbStore = getFirestore(fbApp);
     if (name === "networth") renderNetWorth();
     if (name === "goal") renderGoal();
     if (name === "history") renderHistory();
+    if (name === "cards") renderCards();
     if (name === "add") renderAdd();
     window.scrollTo(0,0);
   }
@@ -898,14 +924,15 @@ const fbStore = getFirestore(fbApp);
       row.className = "reimb-row";
       row.innerHTML = `
         <div class="checkbox ${received?'checked':''}" data-src="${src.id}">${received?'✓':''}</div>
-        <div class="reimb-info">
+        <div class="reimb-info" style="cursor:pointer;">
           <div class="reimb-name">${src.name}</div>
-          <div class="reimb-desc">${src.desc}</div>
+          <div class="reimb-desc">${src.desc}${src.budgetCategory ? ' · ' + src.budgetCategory : ''}</div>
         </div>
         <div class="reimb-amt">${fmt(src.amount)}</div>
         <button class="icon-btn" title="Remove">✕</button>
       `;
       row.querySelector(".checkbox").addEventListener("click", () => toggleReimb(src));
+      row.querySelector(".reimb-info").addEventListener("click", () => openEditReimbSource(src));
       row.querySelector("button").addEventListener("click", async () => {
         state.reimbSources.items = state.reimbSources.items.filter(s=>s.id!==src.id);
         await saveDocFS("reimbursement_sources", state.reimbSources);
@@ -916,6 +943,12 @@ const fbStore = getFirestore(fbApp);
     $("home-reimb-outstanding").textContent = fmt(outstanding);
   }
 
+  function budgetIncomeOptionsHtml(selected) {
+    const cats = (state.budget.income||[]).map(c=>c.name);
+    return '<option value="">— Not tracked in Budget —</option>' +
+      cats.map(c=>`<option value="${c}" ${c===selected?'selected':''}>${c}</option>`).join("");
+  }
+
   $("add-reimb-source-btn").addEventListener("click", () => {
     openModal("Add recurring reimbursement", `
       <div class="field-label" style="margin-top:0;">Who</div>
@@ -924,18 +957,43 @@ const fbStore = getFirestore(fbApp);
       <input type="text" class="text-input" id="modal-reimb-desc" placeholder="e.g. Half of internet bill">
       <div class="field-label">Expected amount</div>
       <input type="number" class="text-input" id="modal-reimb-amount" placeholder="0">
+      <div class="field-label">Counts toward which Budget income category?</div>
+      <select class="text-input" id="modal-reimb-budget-cat">${budgetIncomeOptionsHtml("")}</select>
       <button class="btn btn-primary" id="modal-reimb-save">Add</button>
     `);
     $("modal-reimb-save").addEventListener("click", async () => {
       const name = $("modal-reimb-name").value.trim();
       const desc = $("modal-reimb-desc").value.trim();
       const amount = parseFloat($("modal-reimb-amount").value)||0;
+      const budgetCategory = $("modal-reimb-budget-cat").value;
       if (!name) return;
-      state.reimbSources.items.push({id:uid(), name, desc, amount});
+      state.reimbSources.items.push({id:uid(), name, desc, amount, budgetCategory});
       await saveDocFS("reimbursement_sources", state.reimbSources);
       closeModal(); renderHome();
     });
   });
+
+  function openEditReimbSource(src) {
+    openModal("Edit reimbursement", `
+      <div class="field-label" style="margin-top:0;">Who</div>
+      <input type="text" class="text-input" id="modal-reimb-name" value="${src.name.replace(/"/g,'&quot;')}">
+      <div class="field-label">What for</div>
+      <input type="text" class="text-input" id="modal-reimb-desc" value="${(src.desc||'').replace(/"/g,'&quot;')}">
+      <div class="field-label">Expected amount</div>
+      <input type="number" class="text-input" id="modal-reimb-amount" value="${src.amount}">
+      <div class="field-label">Counts toward which Budget income category?</div>
+      <select class="text-input" id="modal-reimb-budget-cat">${budgetIncomeOptionsHtml(src.budgetCategory||"")}</select>
+      <button class="btn btn-primary" id="modal-reimb-save">Save</button>
+    `);
+    $("modal-reimb-save").addEventListener("click", async () => {
+      src.name = $("modal-reimb-name").value.trim() || src.name;
+      src.desc = $("modal-reimb-desc").value.trim();
+      src.amount = parseFloat($("modal-reimb-amount").value)||0;
+      src.budgetCategory = $("modal-reimb-budget-cat").value;
+      await saveDocFS("reimbursement_sources", state.reimbSources);
+      closeModal(); renderHome();
+    });
+  }
 
   async function toggleReimb(src) {
     const tx = homeMonthTx();
@@ -943,7 +1001,8 @@ const fbStore = getFirestore(fbApp);
     if (idx >= 0) {
       tx.splice(idx,1);
     } else {
-      tx.push({id:uid(), type:"reimbursement", sourceId:src.id, category:"Reimbursement: "+src.name, amount:Number(src.amount)||0, date: todayISO(), note: src.desc});
+      const category = src.budgetCategory || src.desc || ("Reimbursement: "+src.name);
+      tx.push({id:uid(), type:"reimbursement", sourceId:src.id, category, amount:Number(src.amount)||0, date: todayISO(), note: "From " + src.name, createdAt: Date.now()});
     }
     await saveDocFS("transactions", state.transactions);
     renderHome();
@@ -964,9 +1023,14 @@ const fbStore = getFirestore(fbApp);
       btn.classList.add("active");
       currentType = btn.dataset.type;
       currentAddCategory = null;
+      currentAddSourceId = null;
+      currentAddSourceName = null;
       renderAddChips();
     });
   });
+
+  let currentAddSourceId = null;
+  let currentAddSourceName = null;
 
   function renderAddChips() {
     const wrap = $("add-category-chips");
@@ -984,10 +1048,18 @@ const fbStore = getFirestore(fbApp);
       chip.addEventListener("click", () => {
         document.querySelectorAll("#add-category-chips .chip").forEach(c=>c.classList.remove("active"));
         chip.classList.add("active");
-        currentAddCategory = name;
         if (currentType === "reimbursement") {
           const src = (state.reimbSources.items||[]).find(s=>s.name===name);
-          if (src) $("add-amount").value = src.amount;
+          if (src) {
+            currentAddCategory = src.budgetCategory || src.desc || name;
+            currentAddSourceId = src.id;
+            currentAddSourceName = src.name;
+            $("add-amount").value = src.amount;
+          }
+        } else {
+          currentAddCategory = name;
+          currentAddSourceId = null;
+          currentAddSourceName = null;
         }
       });
       wrap.appendChild(chip);
@@ -1001,14 +1073,13 @@ const fbStore = getFirestore(fbApp);
     const date = $("add-date").value || todayISO();
     const key = monthKey(date);
     if (!Array.isArray(state.transactions[key])) state.transactions[key] = [];
-    let sourceId = null;
-    if (currentType === "reimbursement") {
-      const src = (state.reimbSources.items||[]).find(s=>s.name===currentAddCategory);
-      sourceId = src ? src.id : null;
-    }
+    const customNote = $("add-note").value || "";
+    const note = currentType === "reimbursement"
+      ? "From " + currentAddSourceName + (customNote ? " — " + customNote : "")
+      : customNote;
     state.transactions[key].push({
-      id: uid(), type: currentType, category: currentAddCategory, sourceId,
-      amount, date, note: $("add-note").value || ""
+      id: uid(), type: currentType, category: currentAddCategory, sourceId: currentAddSourceId,
+      amount, date, note, createdAt: Date.now()
     });
     await saveDocFS("transactions", state.transactions);
     $("add-status").style.color = "var(--teal)";
@@ -1035,10 +1106,11 @@ const fbStore = getFirestore(fbApp);
     list.forEach(cat => {
       const actual = categoryActual(cat.name, types);
       const budget = Number(cat.amount)||0;
-      const pct = budget > 0 ? Math.min(100, (actual/budget)*100) : 0;
+      const rawPct = budget > 0 ? (actual/budget)*100 : 0;
+      const pct = Math.min(100, rawPct);
       let barColor = "var(--teal)";
-      if (isExpense && pct >= 100) barColor = "var(--coral)";
-      else if (isExpense && pct >= 80) barColor = "var(--gold)";
+      if (isExpense && rawPct > 100) barColor = "var(--coral)";
+      else if (isExpense && rawPct >= 80) barColor = "var(--gold)";
       const row = document.createElement("div");
       row.className = "cat-row";
       row.style.flexDirection = "column";
@@ -1068,9 +1140,13 @@ const fbStore = getFirestore(fbApp);
           Object.keys(state.transactions).forEach(mk => {
             (state.transactions[mk]||[]).forEach(t => { if (t.category === oldName) t.category = newName; });
           });
+          (state.reimbSources.items||[]).forEach(src => {
+            if (src.budgetCategory === oldName) src.budgetCategory = newName;
+          });
           cat.name = newName;
           await saveDocFS("budget", state.budget);
           await saveDocFS("transactions", state.transactions);
+          await saveDocFS("reimbursement_sources", state.reimbSources);
           closeModal(); renderBudget(); renderHome();
         });
       });
@@ -1146,7 +1222,7 @@ const fbStore = getFirestore(fbApp);
     let added = 0;
     (state.budget.fixed||[]).forEach(cat => {
       if (already.has(cat.name)) return;
-      tx.push({ id: uid(), type:"expense", category: cat.name, amount: Number(cat.amount)||0, date: todayISO(), note: "Auto-logged from budget" });
+      tx.push({ id: uid(), type:"expense", category: cat.name, amount: Number(cat.amount)||0, date: todayISO(), note: "Auto-logged from budget", createdAt: Date.now() });
       added++;
     });
     if (added > 0) {
@@ -1557,7 +1633,11 @@ const fbStore = getFirestore(fbApp);
     $("history-month-label").textContent = labelDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
     const tx = (state.transactions[historyMonth] || []).slice()
-      .sort((a, b) => new Date(b.date + "T00:00:00") - new Date(a.date + "T00:00:00"));
+      .sort((a, b) => {
+        const dateDiff = new Date(b.date + "T00:00:00") - new Date(a.date + "T00:00:00");
+        if (dateDiff !== 0) return dateDiff;
+        return (b.createdAt||0) - (a.createdAt||0);
+      });
 
     const income = tx.filter(t => t.type === "income" || t.type === "reimbursement").reduce((s, t) => s + Number(t.amount || 0), 0);
     const expense = tx.filter(t => t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -1565,13 +1645,24 @@ const fbStore = getFirestore(fbApp);
     $("history-expense-total").textContent = fmt2(expense);
     renderSpendChart(tx.filter(t => t.type === "expense"), expense);
 
+    populateHistoryCategoryFilter(tx);
+    const filteredTx = tx.filter(t => {
+      if (historyTypeFilter !== "all" && t.type !== historyTypeFilter) return false;
+      if (historyCategoryFilter !== "all" && t.category !== historyCategoryFilter) return false;
+      return true;
+    });
+
     const list = $("history-list");
     list.innerHTML = "";
     if (tx.length === 0) {
       list.innerHTML = '<div class="empty-state">No transactions logged for this month yet.</div>';
       return;
     }
-    tx.forEach(t => {
+    if (filteredTx.length === 0) {
+      list.innerHTML = '<div class="empty-state">No transactions match this filter.</div>';
+      return;
+    }
+    filteredTx.forEach(t => {
       const isPositive = t.type === "income" || t.type === "reimbursement";
       const dateLabel = new Date(t.date + "T00:00:00").toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       const row = document.createElement("div");
@@ -1595,8 +1686,180 @@ const fbStore = getFirestore(fbApp);
     });
   }
 
+  let historyTypeFilter = "all";
+  let historyCategoryFilter = "all";
+
+  function populateHistoryCategoryFilter(monthTx) {
+    const sel = $("history-category-filter");
+    const prevValue = historyCategoryFilter;
+    const cats = Array.from(new Set(monthTx.map(t=>t.category).filter(Boolean))).sort();
+    sel.innerHTML = '<option value="all">All categories</option>' + cats.map(c=>`<option value="${c}">${c}</option>`).join("");
+    sel.value = cats.includes(prevValue) ? prevValue : "all";
+    historyCategoryFilter = sel.value;
+  }
+
+  $("history-type-filter").addEventListener("change", (e) => { historyTypeFilter = e.target.value; renderHistory(); });
+  $("history-category-filter").addEventListener("change", (e) => { historyCategoryFilter = e.target.value; renderHistory(); });
+
   $("history-prev").addEventListener("click", () => { historyMonth = shiftMonth(historyMonth, -1); renderHistory(); });
   $("history-next").addEventListener("click", () => { historyMonth = shiftMonth(historyMonth, 1); renderHistory(); });
+
+  // ---------- Render: CARDS ----------
+  const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  function cardCycleStart(card) {
+    const now = new Date();
+    const day = card.renewalDay || 1;
+    let year = now.getFullYear();
+    let candidate = new Date(year, (card.renewalMonth||1)-1, day);
+    if (candidate > now) { year -= 1; candidate = new Date(year, (card.renewalMonth||1)-1, day); }
+    return candidate;
+  }
+
+  function renderCards() {
+    const container = $("cards-list");
+    container.innerHTML = "";
+    const cards = state.cardBenefits.cards || [];
+    if (cards.length === 0) {
+      container.innerHTML = '<div class="empty-state">Add a card to start tracking whether its fee pays for itself.</div>';
+      return;
+    }
+    cards.forEach(card => {
+      const cycleStart = cardCycleStart(card);
+      const cycleStartStr = cycleStart.getFullYear() + "-" + String(cycleStart.getMonth()+1).padStart(2,"0") + "-" + String(cycleStart.getDate()).padStart(2,"0");
+      const entries = (state.cardBenefits.entries||[]).filter(e => e.cardId === card.id && e.date >= cycleStartStr)
+        .sort((a,b) => {
+          const dateDiff = new Date(b.date+"T00:00:00") - new Date(a.date+"T00:00:00");
+          if (dateDiff !== 0) return dateDiff;
+          return (b.createdAt||0) - (a.createdAt||0);
+        });
+      const captured = entries.reduce((s,e)=>s+Number(e.amount||0),0);
+      const fee = Number(card.annualFee)||0;
+      const net = captured - fee;
+
+      const wrap = document.createElement("div");
+      wrap.className = "card " + (net >= 0 ? "accent-teal" : "accent-coral");
+      wrap.style.marginBottom = "16px";
+
+      let entriesHtml = entries.length === 0
+        ? '<div class="empty-state" style="padding:14px 0;">Nothing logged this card-year yet.</div>'
+        : entries.map(e => `
+            <div class="tx-row">
+              <div class="tx-date">${new Date(e.date+"T00:00:00").toLocaleDateString(undefined,{month:'short',day:'numeric'})}</div>
+              <div class="tx-info">
+                <div class="tx-cat">${e.description}</div>
+                ${e.note ? `<div class="tx-note">${e.note}</div>` : ""}
+              </div>
+              <div class="tx-amt pos">+${fmt2(e.amount)}</div>
+              <button class="icon-btn" data-entry-id="${e.id}" title="Delete">✕</button>
+            </div>`).join("");
+
+      wrap.innerHTML = `
+        <div class="row" style="align-items:flex-start;">
+          <span class="card-label" style="cursor:pointer; text-decoration:underline dotted; font-size:15px; color:var(--text);">${card.name}</span>
+          <button class="icon-btn" data-remove-card="${card.id}" title="Remove card">✕</button>
+        </div>
+        <div class="big-number small">${fmt2(net)}</div>
+        <div class="sub-line">${fmt(captured)} captured − ${fmt(fee)} fee · renews ${MONTH_NAMES[(card.renewalMonth||1)-1]} ${card.renewalDay||1}</div>
+        <button class="btn btn-secondary btn-small" data-log-card="${card.id}" style="margin-top:12px;">Log a benefit</button>
+        <div style="margin-top:10px;">${entriesHtml}</div>
+      `;
+
+      wrap.querySelector(".card-label").addEventListener("click", () => openEditCard(card));
+      wrap.querySelector("[data-remove-card]").addEventListener("click", async () => {
+        state.cardBenefits.cards = state.cardBenefits.cards.filter(c=>c.id!==card.id);
+        state.cardBenefits.entries = state.cardBenefits.entries.filter(e=>e.cardId!==card.id);
+        await saveDocFS("card_benefits", state.cardBenefits);
+        renderCards();
+      });
+      wrap.querySelector("[data-log-card]").addEventListener("click", () => openLogBenefit(card));
+      wrap.querySelectorAll("[data-entry-id]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          state.cardBenefits.entries = state.cardBenefits.entries.filter(e=>e.id!==btn.dataset.entryId);
+          await saveDocFS("card_benefits", state.cardBenefits);
+          renderCards();
+        });
+      });
+
+      container.appendChild(wrap);
+    });
+  }
+
+  function monthOptionsHtml(selected) {
+    return MONTH_NAMES.map((m,i) => `<option value="${i+1}" ${i+1===selected?'selected':''}>${m}</option>`).join("");
+  }
+
+  $("add-card-btn").addEventListener("click", () => {
+    openModal("Add a card", `
+      <div class="field-label" style="margin-top:0;">Card name</div>
+      <input type="text" class="text-input" id="card-name" placeholder="e.g. Amex Platinum">
+      <div class="field-label">Annual fee</div>
+      <input type="number" class="text-input" id="card-fee" placeholder="0">
+      <div class="field-label">Renews on</div>
+      <div style="display:flex; gap:8px;">
+        <select class="text-input" id="card-renewal-month">${monthOptionsHtml(1)}</select>
+        <input type="number" class="text-input" id="card-renewal-day" placeholder="Day" min="1" max="31" style="width:90px;">
+      </div>
+      <button class="btn btn-primary" id="card-save">Add card</button>
+    `);
+    $("card-save").addEventListener("click", async () => {
+      const name = $("card-name").value.trim();
+      const annualFee = parseFloat($("card-fee").value)||0;
+      const renewalMonth = parseInt($("card-renewal-month").value)||1;
+      const renewalDay = parseInt($("card-renewal-day").value)||1;
+      if (!name) return;
+      state.cardBenefits.cards.push({ id:uid(), name, annualFee, renewalMonth, renewalDay });
+      await saveDocFS("card_benefits", state.cardBenefits);
+      closeModal(); renderCards();
+    });
+  });
+
+  function openEditCard(card) {
+    openModal("Edit card", `
+      <div class="field-label" style="margin-top:0;">Card name</div>
+      <input type="text" class="text-input" id="card-name" value="${card.name.replace(/"/g,'&quot;')}">
+      <div class="field-label">Annual fee</div>
+      <input type="number" class="text-input" id="card-fee" value="${card.annualFee}">
+      <div class="field-label">Renews on</div>
+      <div style="display:flex; gap:8px;">
+        <select class="text-input" id="card-renewal-month">${monthOptionsHtml(card.renewalMonth||1)}</select>
+        <input type="number" class="text-input" id="card-renewal-day" value="${card.renewalDay||1}" min="1" max="31" style="width:90px;">
+      </div>
+      <button class="btn btn-primary" id="card-save">Save changes</button>
+    `);
+    $("card-save").addEventListener("click", async () => {
+      card.name = $("card-name").value.trim() || card.name;
+      card.annualFee = parseFloat($("card-fee").value)||0;
+      card.renewalMonth = parseInt($("card-renewal-month").value)||1;
+      card.renewalDay = parseInt($("card-renewal-day").value)||1;
+      await saveDocFS("card_benefits", state.cardBenefits);
+      closeModal(); renderCards();
+    });
+  }
+
+  function openLogBenefit(card) {
+    openModal("Log a benefit — " + card.name, `
+      <div class="field-label" style="margin-top:0;">What was it</div>
+      <input type="text" class="text-input" id="benefit-desc" placeholder="e.g. Flight refund via trip insurance">
+      <div class="field-label">Amount</div>
+      <input type="number" class="text-input" id="benefit-amount" placeholder="0" step="0.01">
+      <div class="field-label">Date</div>
+      <input type="date" class="text-input" id="benefit-date" value="${todayISO()}">
+      <div class="field-label">Note (optional)</div>
+      <input type="text" class="text-input" id="benefit-note" placeholder="">
+      <button class="btn btn-primary" id="benefit-save">Save</button>
+    `);
+    $("benefit-save").addEventListener("click", async () => {
+      const description = $("benefit-desc").value.trim();
+      const amount = parseFloat($("benefit-amount").value)||0;
+      const date = $("benefit-date").value || todayISO();
+      const note = $("benefit-note").value;
+      if (!description || amount <= 0) return;
+      state.cardBenefits.entries.push({ id:uid(), cardId:card.id, description, amount, date, note, createdAt: Date.now() });
+      await saveDocFS("card_benefits", state.cardBenefits);
+      closeModal(); renderCards();
+    });
+  }
 
   // ---------- Modal ----------
   function openModal(title, bodyHtml) {
@@ -1651,6 +1914,7 @@ const fbStore = getFirestore(fbApp);
       reimbSources: state.reimbSources,
       goal: state.goal,
       transactions: state.transactions,
+      cardBenefits: state.cardBenefits,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
