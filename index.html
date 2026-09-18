@@ -390,7 +390,11 @@
             <span id="home-expense-actual" style="font-weight:600;">—</span>
           </div>
           <div class="row">
-            <span style="font-size:14px;color:var(--text-dim);">Left in budget</span>
+            <span style="font-size:14px;color:var(--text-dim);">Saved / invested</span>
+            <span id="home-savings-actual" style="font-weight:600; color:var(--teal);">—</span>
+          </div>
+          <div class="row">
+            <span style="font-size:14px;color:var(--text-dim);">Left unallocated</span>
             <span id="home-leftover" style="font-weight:600;">—</span>
           </div>
           <div class="row">
@@ -420,6 +424,7 @@
       <button class="active" data-type="expense">Expense</button>
       <button data-type="income">Income</button>
       <button data-type="reimbursement">Reimbursement</button>
+      <button data-type="savings">Savings</button>
     </div>
 
     <div class="amount-entry">
@@ -442,9 +447,9 @@
   <!-- BUDGET -->
   <section class="view" id="view-budget">
     <div class="card accent-teal">
-      <div class="card-label">Potential savings each month</div>
+      <div class="card-label">Unallocated each month</div>
       <div class="big-number" id="budget-leftover">—</div>
-      <div class="sub-line" id="budget-leftover-sub">Income minus fixed and variable budgets</div>
+      <div class="sub-line" id="budget-leftover-sub">Income minus fixed, variable, and savings budgets</div>
       <div style="display:flex; align-items:center; gap:16px; margin-top:14px;">
         <div style="width:110px; height:110px; flex-shrink:0;"><canvas id="budget-pie-chart"></canvas></div>
         <div id="budget-pie-legend" style="flex:1;"></div>
@@ -468,6 +473,11 @@
       </div>
     </div>
 
+    <h2 class="section-title">Savings &amp; investing</h2>
+    <div style="font-size:13px; color:var(--text-dim); margin-bottom:10px;">Money you move toward a goal — separate from spending, so it shows up as its own slice below instead of just vanishing from "potential savings."</div>
+    <div class="card" id="budget-savings-list"></div>
+    <button class="btn btn-ghost btn-small" data-add-cat="savings">+ Add savings goal</button>
+
     <div style="height:16px;"></div>
   </section>
 
@@ -490,7 +500,11 @@
         <span id="ytd-expense" style="font-weight:600; color:var(--coral);">—</span>
       </div>
       <div class="row">
-        <span style="font-size:14px;color:var(--text-dim);">Net saved</span>
+        <span style="font-size:14px;color:var(--text-dim);">Saved</span>
+        <span id="ytd-saved" style="font-weight:600; color:var(--teal);">—</span>
+      </div>
+      <div class="row">
+        <span style="font-size:14px;color:var(--text-dim);">Unallocated</span>
         <span id="ytd-net" style="font-weight:700;">—</span>
       </div>
     </div>
@@ -511,6 +525,10 @@
         <span style="font-size:14px;color:var(--text-dim);">Spent</span>
         <span id="history-expense-total" style="font-weight:600; color:var(--coral);">—</span>
       </div>
+      <div class="row">
+        <span style="font-size:14px;color:var(--text-dim);">Saved</span>
+        <span id="history-savings-total" style="font-weight:600; color:var(--teal);">—</span>
+      </div>
     </div>
 
     <div class="card" id="history-spend-card">
@@ -527,6 +545,7 @@
         <option value="income">Income</option>
         <option value="expense">Expenses</option>
         <option value="reimbursement">Reimbursements</option>
+        <option value="savings">Savings</option>
       </select>
       <select class="text-input" id="history-category-filter" style="flex:1;">
         <option value="all">All categories</option>
@@ -694,7 +713,8 @@ const fbStore = getFirestore(fbApp);
     budget: {
       income: [],
       fixed: [],
-      variable: []
+      variable: [],
+      savings: []
     },
     networthAccounts: { items: [] },
     networthHistory: { items: [] },
@@ -897,14 +917,15 @@ const fbStore = getFirestore(fbApp);
     const tx = homeMonthTx();
     const incomeActual = tx.filter(t=>t.type==="income"||t.type==="reimbursement").reduce((s,t)=>s+Number(t.amount||0),0);
     const expenseActual = tx.filter(t=>t.type==="expense").reduce((s,t)=>s+Number(t.amount||0),0);
+    const savingsActual = tx.filter(t=>t.type==="savings").reduce((s,t)=>s+Number(t.amount||0),0);
     const budgetIncome = (state.budget.income||[]).reduce((s,c)=>s+Number(c.amount||0),0);
     const budgetExpense = [...(state.budget.fixed||[]),...(state.budget.variable||[])].reduce((s,c)=>s+Number(c.amount||0),0);
     $("home-income-actual").textContent = fmt2(incomeActual) + " / " + fmt(budgetIncome);
     $("home-expense-actual").textContent = fmt2(expenseActual) + " / " + fmt(budgetExpense);
-    const leftover = budgetIncome - budgetExpense - expenseActual + Math.min(0,0);
-    const leftoverActual = incomeActual - expenseActual;
+    $("home-savings-actual").textContent = fmt2(savingsActual);
+    const leftoverActual = incomeActual - expenseActual - savingsActual;
     $("home-leftover").textContent = fmt2(leftoverActual);
-    const savingsRate = incomeActual > 0 ? (leftoverActual/incomeActual)*100 : 0;
+    const savingsRate = incomeActual > 0 ? ((incomeActual-expenseActual)/incomeActual)*100 : 0;
     $("home-savings-rate").textContent = incomeActual > 0 ? savingsRate.toFixed(0) + "%" : "—";
 
     // Reimbursements checklist
@@ -1037,6 +1058,7 @@ const fbStore = getFirestore(fbApp);
     let options = [];
     if (currentType === "income") options = (state.budget.income||[]).map(c=>c.name);
     else if (currentType === "expense") options = [...(state.budget.fixed||[]),...(state.budget.variable||[])].map(c=>c.name);
+    else if (currentType === "savings") options = (state.budget.savings||[]).map(c=>c.name);
     else options = (state.reimbSources.items||[]).map(s=>s.name);
 
     options.forEach(name => {
@@ -1168,13 +1190,14 @@ const fbStore = getFirestore(fbApp);
     const totalIncome = (state.budget.income||[]).reduce((s,c)=>s+Number(c.amount||0),0);
     const totalFixed = (state.budget.fixed||[]).reduce((s,c)=>s+Number(c.amount||0),0);
     const totalVariable = (state.budget.variable||[]).reduce((s,c)=>s+Number(c.amount||0),0);
-    const leftover = totalIncome - totalFixed - totalVariable;
+    const totalSavings = (state.budget.savings||[]).reduce((s,c)=>s+Number(c.amount||0),0);
+    const leftover = totalIncome - totalFixed - totalVariable - totalSavings;
 
     $("budget-leftover").textContent = fmt2(leftover);
     $("budget-leftover").style.color = leftover < 0 ? "var(--coral)" : "var(--text)";
     $("budget-leftover-sub").textContent = totalIncome > 0
       ? (leftover >= 0
-          ? Math.round((leftover/totalIncome)*100) + "% of your budgeted income is left over"
+          ? Math.round((leftover/totalIncome)*100) + "% of your budgeted income is still unallocated"
           : "You're budgeting " + Math.round((Math.abs(leftover)/totalIncome)*100) + "% more than your income")
       : "Add income and expense categories to see your balance";
 
@@ -1190,7 +1213,8 @@ const fbStore = getFirestore(fbApp);
     const labels = ["Fixed", "Variable"];
     const data = [totalFixed, totalVariable];
     const colors = [getCss('--gold'), getCss('--coral')];
-    if (leftover > 0) { labels.push("Potential savings"); data.push(leftover); colors.push(getCss('--teal')); }
+    if (totalSavings > 0) { labels.push("Savings"); data.push(totalSavings); colors.push(getCss('--teal')); }
+    if (leftover > 0) { labels.push("Unallocated"); data.push(leftover); colors.push("#4a7a9c"); }
 
     if (budgetPieChart) budgetPieChart.destroy();
     budgetPieChart = new Chart(ctx, {
@@ -1213,6 +1237,7 @@ const fbStore = getFirestore(fbApp);
     renderBudgetSection("budget-income-list", state.budget.income, ["income","reimbursement"], false, "income");
     renderBudgetSection("budget-fixed-list", state.budget.fixed, ["expense"], true, "fixed");
     renderBudgetSection("budget-variable-list", state.budget.variable, ["expense"], true, "variable");
+    renderBudgetSection("budget-savings-list", state.budget.savings, ["savings"], false, "savings");
   }
 
   document.querySelectorAll("[data-add-cat]").forEach(btn => {
@@ -1479,8 +1504,9 @@ const fbStore = getFirestore(fbApp);
     const opts = [
       { v: "__income__", l: "Total income" },
       { v: "__expense__", l: "Total expenses" },
+      { v: "__savings__", l: "Total savings" },
     ];
-    [...(state.budget.income||[]), ...(state.budget.fixed||[]), ...(state.budget.variable||[])]
+    [...(state.budget.income||[]), ...(state.budget.fixed||[]), ...(state.budget.variable||[]), ...(state.budget.savings||[])]
       .forEach(c => opts.push({ v: c.name, l: c.name }));
     opts.forEach(o => {
       const opt = document.createElement("option");
@@ -1495,6 +1521,7 @@ const fbStore = getFirestore(fbApp);
     const tx = state.transactions[key] || [];
     if (selection === "__income__") return tx.filter(t=>t.type==="income"||t.type==="reimbursement").reduce((s,t)=>s+Number(t.amount||0),0);
     if (selection === "__expense__") return tx.filter(t=>t.type==="expense").reduce((s,t)=>s+Number(t.amount||0),0);
+    if (selection === "__savings__") return tx.filter(t=>t.type==="savings").reduce((s,t)=>s+Number(t.amount||0),0);
     return tx.filter(t=>t.category===selection).reduce((s,t)=>s+Number(t.amount||0),0);
   }
 
@@ -1504,7 +1531,7 @@ const fbStore = getFirestore(fbApp);
     const data = months.map(k => categoryMonthlyTotal(k, momSelection));
     const ctx = $("mom-chart");
     if (momChart) momChart.destroy();
-    const barColor = momSelection === "__income__" ? getCss('--teal') : (momSelection === "__expense__" ? getCss('--coral') : getCss('--gold'));
+    const barColor = (momSelection === "__income__" || momSelection === "__savings__") ? getCss('--teal') : (momSelection === "__expense__" ? getCss('--coral') : getCss('--gold'));
     momChart = new Chart(ctx, {
       type: 'bar',
       data: { labels, datasets: [{ data, backgroundColor: barColor, borderRadius: 4, maxBarThickness: 28 }] },
@@ -1553,17 +1580,19 @@ const fbStore = getFirestore(fbApp);
 
   function renderYtd() {
     const year = String(new Date().getFullYear());
-    let income = 0, expense = 0;
+    let income = 0, expense = 0, saved = 0;
     Object.keys(state.transactions).forEach(mk => {
       if (!mk.startsWith(year + "-")) return;
       (state.transactions[mk]||[]).forEach(t => {
         if (t.type === "income" || t.type === "reimbursement") income += Number(t.amount||0);
         else if (t.type === "expense") expense += Number(t.amount||0);
+        else if (t.type === "savings") saved += Number(t.amount||0);
       });
     });
     $("ytd-income").textContent = fmt2(income);
     $("ytd-expense").textContent = fmt2(expense);
-    $("ytd-net").textContent = fmt2(income - expense);
+    $("ytd-saved").textContent = fmt2(saved);
+    $("ytd-net").textContent = fmt2(income - expense - saved);
   }
 
   function shiftMonth(key, delta) {
@@ -1623,8 +1652,10 @@ const fbStore = getFirestore(fbApp);
 
     const income = tx.filter(t => t.type === "income" || t.type === "reimbursement").reduce((s, t) => s + Number(t.amount || 0), 0);
     const expense = tx.filter(t => t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
+    const saved = tx.filter(t => t.type === "savings").reduce((s, t) => s + Number(t.amount || 0), 0);
     $("history-income-total").textContent = fmt2(income);
     $("history-expense-total").textContent = fmt2(expense);
+    $("history-savings-total").textContent = fmt2(saved);
     renderSpendChart(tx.filter(t => t.type === "expense"), expense);
 
     populateHistoryCategoryFilter(tx);
