@@ -371,9 +371,14 @@
       </div>
     </div>
 
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-top:22px;">
+      <button class="icon-btn" id="home-month-prev" style="font-size:20px;">‹</button>
+      <h2 class="section-title" style="margin:0; padding-top:0;" id="home-month-label">—</h2>
+      <button class="icon-btn" id="home-month-next" style="font-size:20px;">›</button>
+    </div>
     <div class="home-grid-bottom">
       <div>
-        <h2 class="section-title">This month</h2>
+        <h2 class="section-title">Summary</h2>
         <div class="card">
           <div class="row">
             <span style="font-size:14px;color:var(--text-dim);">Income received</span>
@@ -394,7 +399,7 @@
         </div>
       </div>
       <div>
-        <h2 class="section-title">Reimbursements this month</h2>
+        <h2 class="section-title">Reimbursements</h2>
         <div class="card" id="home-reimb-card">
           <div id="home-reimb-list"></div>
           <div class="row" style="margin-top:12px; padding-top:10px; border-top:1px solid var(--border);">
@@ -435,7 +440,17 @@
 
   <!-- BUDGET -->
   <section class="view" id="view-budget">
-    <h2 class="section-title" style="margin-top:8px;">Income</h2>
+    <div class="card accent-teal">
+      <div class="card-label">Potential savings each month</div>
+      <div class="big-number" id="budget-leftover">—</div>
+      <div class="sub-line" id="budget-leftover-sub">Income minus fixed and variable budgets</div>
+      <div style="display:flex; align-items:center; gap:16px; margin-top:14px;">
+        <div style="width:110px; height:110px; flex-shrink:0;"><canvas id="budget-pie-chart"></canvas></div>
+        <div id="budget-pie-legend" style="flex:1;"></div>
+      </div>
+    </div>
+
+    <h2 class="section-title">Income</h2>
     <div class="card" id="budget-income-list"></div>
     <button class="btn btn-ghost btn-small" data-add-cat="income">+ Add income source</button>
 
@@ -495,6 +510,14 @@
       <div class="row">
         <span style="font-size:14px;color:var(--text-dim);">Spent</span>
         <span id="history-expense-total" style="font-weight:600; color:var(--coral);">—</span>
+      </div>
+    </div>
+
+    <div class="card" id="history-spend-card">
+      <div class="card-label">Where it went</div>
+      <div style="display:flex; align-items:center; gap:16px; margin-top:6px;">
+        <div style="width:120px; height:120px; flex-shrink:0;"><canvas id="history-spend-chart"></canvas></div>
+        <div id="history-spend-legend" style="flex:1;"></div>
       </div>
     </div>
 
@@ -712,6 +735,15 @@ const fbStore = getFirestore(fbApp);
     return state.transactions[key];
   }
 
+  let homeMonth = monthKey();
+  function homeMonthTx() {
+    if (!Array.isArray(state.transactions[homeMonth])) state.transactions[homeMonth] = [];
+    return state.transactions[homeMonth];
+  }
+
+  $("home-month-prev").addEventListener("click", () => { homeMonth = shiftMonth(homeMonth, -1); renderHome(); });
+  $("home-month-next").addEventListener("click", () => { homeMonth = shiftMonth(homeMonth, 1); renderHome(); });
+
   // ---------- Navigation ----------
   function showView(name) {
     document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
@@ -812,6 +844,9 @@ const fbStore = getFirestore(fbApp);
     const name = currentUser && currentUser.displayName ? currentUser.displayName.split(" ")[0] : null;
     $("home-greeting").textContent = name ? (timeGreeting() + ", " + name) : timeGreeting();
 
+    const [hy, hm] = homeMonth.split("-").map(Number);
+    $("home-month-label").textContent = new Date(hy, hm-1, 1).toLocaleDateString(undefined, { month:'long', year:'numeric' });
+
     const { assets, liabilities, net } = nwTotals();
     $("home-networth").textContent = fmt(net);
     const hist = state.networthHistory.items || [];
@@ -834,7 +869,7 @@ const fbStore = getFirestore(fbApp);
     $("home-fire-eta").textContent = fp.fiNumber > 0 ? formatEta(fp.months) : "Set your goal";
     $("home-fire-bar").style.width = Math.max(2, fp.pct) + "%";
 
-    const tx = currentMonthTx();
+    const tx = homeMonthTx();
     const incomeActual = tx.filter(t=>t.type==="income"||t.type==="reimbursement").reduce((s,t)=>s+Number(t.amount||0),0);
     const expenseActual = tx.filter(t=>t.type==="expense").reduce((s,t)=>s+Number(t.amount||0),0);
     const budgetIncome = (state.budget.income||[]).reduce((s,c)=>s+Number(c.amount||0),0);
@@ -903,7 +938,7 @@ const fbStore = getFirestore(fbApp);
   });
 
   async function toggleReimb(src) {
-    const tx = currentMonthTx();
+    const tx = homeMonthTx();
     const idx = tx.findIndex(t => t.type==="reimbursement" && t.sourceId === src.id);
     if (idx >= 0) {
       tx.splice(idx,1);
@@ -1053,7 +1088,53 @@ const fbStore = getFirestore(fbApp);
     });
   }
 
+  let budgetPieChart = null;
+  function renderBudgetBalance() {
+    const totalIncome = (state.budget.income||[]).reduce((s,c)=>s+Number(c.amount||0),0);
+    const totalFixed = (state.budget.fixed||[]).reduce((s,c)=>s+Number(c.amount||0),0);
+    const totalVariable = (state.budget.variable||[]).reduce((s,c)=>s+Number(c.amount||0),0);
+    const leftover = totalIncome - totalFixed - totalVariable;
+
+    $("budget-leftover").textContent = fmt2(leftover);
+    $("budget-leftover").style.color = leftover < 0 ? "var(--coral)" : "var(--text)";
+    $("budget-leftover-sub").textContent = totalIncome > 0
+      ? (leftover >= 0
+          ? Math.round((leftover/totalIncome)*100) + "% of your budgeted income is left over"
+          : "You're budgeting " + Math.round((Math.abs(leftover)/totalIncome)*100) + "% more than your income")
+      : "Add income and expense categories to see your balance";
+
+    const ctx = $("budget-pie-chart");
+    const legend = $("budget-pie-legend");
+    if (totalIncome <= 0) {
+      ctx.parentElement.style.display = "none";
+      legend.innerHTML = "";
+      if (budgetPieChart) { budgetPieChart.destroy(); budgetPieChart = null; }
+      return;
+    }
+    ctx.parentElement.style.display = "";
+    const labels = ["Fixed", "Variable"];
+    const data = [totalFixed, totalVariable];
+    const colors = [getCss('--gold'), getCss('--coral')];
+    if (leftover > 0) { labels.push("Potential savings"); data.push(leftover); colors.push(getCss('--teal')); }
+
+    if (budgetPieChart) budgetPieChart.destroy();
+    budgetPieChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: getCss('--surface'), borderWidth:2 }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } }, cutout: '60%' }
+    });
+    legend.innerHTML = labels.map((l,i) => {
+      const pct = totalIncome>0 ? ((data[i]/totalIncome)*100).toFixed(0) : 0;
+      return `<div style="display:flex; align-items:center; gap:8px; font-size:13px; margin-top:6px;">
+        <span style="width:10px; height:10px; border-radius:3px; background:${colors[i]}; flex-shrink:0;"></span>
+        <span style="flex:1;">${l}</span>
+        <span style="color:var(--text-dim);">${fmt(data[i])} · ${pct}%</span>
+      </div>`;
+    }).join("");
+  }
+
   function renderBudget() {
+    renderBudgetBalance();
     renderBudgetSection("budget-income-list", state.budget.income, ["income","reimbursement"], false, "income");
     renderBudgetSection("budget-fixed-list", state.budget.fixed, ["expense"], true, "fixed");
     renderBudgetSection("budget-variable-list", state.budget.variable, ["expense"], true, "variable");
@@ -1433,6 +1514,39 @@ const fbStore = getFirestore(fbApp);
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
   }
 
+  let spendChart = null;
+  const SPEND_PALETTE = ["#E3A857", "#E2735C", "#6FBFA5", "#8a6d3f", "#c98a3f", "#a95050", "#4a7a9c", "#6C7A8E"];
+  function renderSpendChart(expenseTx, totalExpense) {
+    const byCat = {};
+    expenseTx.forEach(t => { byCat[t.category] = (byCat[t.category]||0) + Number(t.amount||0); });
+    const sorted = Object.entries(byCat).sort((a,b) => b[1]-a[1]);
+    const labels = sorted.map(x=>x[0]);
+    const data = sorted.map(x=>x[1]);
+    const ctx = $("history-spend-chart");
+    const legend = $("history-spend-legend");
+    if (labels.length === 0) {
+      $("history-spend-card").style.display = "none";
+      if (spendChart) { spendChart.destroy(); spendChart = null; }
+      return;
+    }
+    $("history-spend-card").style.display = "";
+    const colors = labels.map((_,i) => SPEND_PALETTE[i % SPEND_PALETTE.length]);
+    if (spendChart) spendChart.destroy();
+    spendChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderColor: getCss('--surface'), borderWidth:2 }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ display:false } }, cutout: '55%' }
+    });
+    legend.innerHTML = sorted.map(([name,amt],i) => {
+      const pct = totalExpense>0 ? ((amt/totalExpense)*100).toFixed(0) : 0;
+      return `<div style="display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:5px;">
+        <span style="width:9px; height:9px; border-radius:3px; background:${colors[i]}; flex-shrink:0;"></span>
+        <span style="flex:1;">${name}</span>
+        <span style="color:var(--text-dim);">${fmt(amt)} · ${pct}%</span>
+      </div>`;
+    }).join("");
+  }
+
   function renderHistory() {
     populateMomCategories();
     renderMomChart();
@@ -1449,6 +1563,7 @@ const fbStore = getFirestore(fbApp);
     const expense = tx.filter(t => t.type === "expense").reduce((s, t) => s + Number(t.amount || 0), 0);
     $("history-income-total").textContent = fmt2(income);
     $("history-expense-total").textContent = fmt2(expense);
+    renderSpendChart(tx.filter(t => t.type === "expense"), expense);
 
     const list = $("history-list");
     list.innerHTML = "";
