@@ -460,7 +460,6 @@
         <h2 class="section-title">Fixed expenses</h2>
         <div class="card" id="budget-fixed-list"></div>
         <button class="btn btn-ghost btn-small" data-add-cat="fixed">+ Add fixed expense</button>
-        <button class="btn btn-secondary btn-small" id="quick-log-fixed-btn" style="margin-left:8px;">Log this month's bills</button>
       </div>
       <div>
         <h2 class="section-title">Variable expenses</h2>
@@ -1215,23 +1214,6 @@ const fbStore = getFirestore(fbApp);
     renderBudgetSection("budget-fixed-list", state.budget.fixed, ["expense"], true, "fixed");
     renderBudgetSection("budget-variable-list", state.budget.variable, ["expense"], true, "variable");
   }
-
-  $("quick-log-fixed-btn").addEventListener("click", async () => {
-    const tx = currentMonthTx();
-    const already = new Set(tx.filter(t=>t.type==="expense").map(t=>t.category));
-    let added = 0;
-    (state.budget.fixed||[]).forEach(cat => {
-      if (already.has(cat.name)) return;
-      tx.push({ id: uid(), type:"expense", category: cat.name, amount: Number(cat.amount)||0, date: todayISO(), note: "Auto-logged from budget", createdAt: Date.now() });
-      added++;
-    });
-    if (added > 0) {
-      await saveDocFS("transactions", state.transactions);
-      renderBudget(); renderHome();
-    }
-    openModal("Fixed bills logged", `<div style="text-align:center; padding:8px 0 4px; font-size:14.5px;">${added > 0 ? "Logged " + added + " bill" + (added>1?"s":"") + " at their budgeted amounts." : "Every fixed bill is already logged for this month."}</div><button class="btn btn-primary" id="quick-log-close">Done</button>`);
-    $("quick-log-close").addEventListener("click", closeModal);
-  });
 
   document.querySelectorAll("[data-add-cat]").forEach(btn => {
     btn.addEventListener("click", () => {
